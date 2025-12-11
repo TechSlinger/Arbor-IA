@@ -7,21 +7,15 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
-      "env": {
-        "EXPO_USE_NODE_RUNTIME": "20.19.4"
-      }
+      "node": "20.19.4"
     },
     "preview": {
       "distribution": "internal",
-      "env": {
-        "EXPO_USE_NODE_RUNTIME": "20.19.4"
-      }
+      "node": "20.19.4"
     },
     "production": {
       "autoIncrement": true,
-      "env": {
-        "EXPO_USE_NODE_RUNTIME": "20.19.4"
-      }
+      "node": "20.19.4"
     }
   },
   "submit": {
