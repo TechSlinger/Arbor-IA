@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from "react";
 import {
   View,
   Text,
@@ -8,12 +8,13 @@ import {
   Alert,
   ScrollView,
   Dimensions,
-} from 'react-native';
-import { useRouter, useLocalSearchParams } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
+} from "react-native";
+import { useRouter, useLocalSearchParams } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
 
-const EXPO_BACKEND_URL = "https://mobile-mirror-16.preview.emergentagent.com";
-const SCREEN_WIDTH = Dimensions.get('window').width;
+const EXPO_BACKEND_URL =
+  process.env.EXPO_PUBLIC_BACKEND_URL ||
+  "https://mobile-mirror-16.preview.emergentagent.com";
 
 interface Farm {
   id: string;
@@ -50,8 +51,10 @@ interface Statistics {
 export default function FarmDetailScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams();
-  const scrollViewRef = useRef<ScrollView>(null);
-  
+  const farmId = Array.isArray(id) ? id[0] : id;
+
+  const scrollViewRef = useRef<ScrollView | null>(null);
+
   const [farm, setFarm] = useState<Farm | null>(null);
   const [trees, setTrees] = useState<{ [key: string]: Tree }>({});
   const [statistics, setStatistics] = useState<Statistics>({
@@ -62,82 +65,84 @@ export default function FarmDetailScreen() {
     dead: 0,
   });
   const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
 
   useEffect(() => {
+    if (!farmId) {
+      console.log("❌ ERROR: farmId is missing");
+      Alert.alert("Erreur", "ID de la ferme manquant.");
+      return;
+    }
     loadFarmData();
-  }, [id]);
+  }, [farmId]);
 
   const loadFarmData = async () => {
-  try {
-    setLoading(true);
+    try {
+      setLoading(true);
+      console.log("➡️ Fetch:", `${EXPO_BACKEND_URL}/api/farms/${farmId}`);
 
-    // ----- Load Farm -----
-    const farmRes = await fetch(`${EXPO_BACKEND_URL}/api/farms/${id}`);
+      // Load farm
+      const farmRes = await fetch(`${EXPO_BACKEND_URL}/api/farms/${farmId}`);
+      if (!farmRes.ok) {
+        console.warn("Farm fetch status:", farmRes.status);
+        throw new Error("Farm request failed");
+      }
+      const farmData = await farmRes.json();
+      setFarm(farmData);
 
-    if (!farmRes.ok) throw new Error("Farm request failed");
+      // Load trees
+      const treesRes = await fetch(
+        `${EXPO_BACKEND_URL}/api/trees?farm_id=${farmId}`
+      );
+      if (!treesRes.ok) {
+        console.warn("Trees fetch status:", treesRes.status);
+        throw new Error("Trees request failed");
+      }
+      const treesData = await treesRes.json();
+      const treesMap: { [key: string]: Tree } = {};
+      if (Array.isArray(treesData)) {
+        treesData.forEach((tree: Tree) => {
+          if (tree && tree.position) {
+            treesMap[tree.position] = tree;
+          }
+        });
+      } else {
+        console.warn("Unexpected trees data:", treesData);
+      }
+      setTrees(treesMap);
 
-    const farmData = await farmRes.json();
-    setFarm(farmData);
-
-    // ----- Load Trees -----
-    const treesRes = await fetch(
-      `${EXPO_BACKEND_URL}/api/trees?farm_id=${id}`
-    );
-
-    if (!treesRes.ok) throw new Error("Trees request failed");
-
-    const treesData = await treesRes.json();
-
-    const treesMap: { [key: string]: Tree } = {};
-    treesData.forEach((tree: Tree) => {
-      treesMap[tree.position] = tree;
-    });
-    setTrees(treesMap);
-
-    // ----- Load Statistics -----
-    const statsRes = await fetch(
-      `${EXPO_BACKEND_URL}/api/statistics/${id}`
-    );
-
-    if (!statsRes.ok) throw new Error("Statistics request failed");
-
-    const statsData = await statsRes.json();
-    setStatistics(statsData);
-  } catch (error) {
-    console.error("Error loading farm data:", error);
-    Alert.alert("Erreur", "Impossible de charger les données de la ferme");
-  } finally {
-    setLoading(false);
-  }
-};
-
-
-  const [cellSize, setCellSize] = useState(40);
-  const [selectedCells, setSelectedCells] = useState<string[]>([]);
-
-  const handleCellPress = (position: string) => {
-    if (trees[position]) {
-      // Navigate to tree detail for editing
-      router.push(`/trees/${trees[position].id}`);
-    } else {
-      // Navigate to add new tree
-      router.push({
-        pathname: '/trees/create',
-        params: { farmId: id, position },
-      });
+      // Load statistics
+      const statsRes = await fetch(
+        `${EXPO_BACKEND_URL}/api/statistics/${farmId}`
+      );
+      if (!statsRes.ok) {
+        console.warn("Stats fetch status:", statsRes.status);
+        throw new Error("Statistics request failed");
+      }
+      const statsData = await statsRes.json();
+      setStatistics(statsData);
+    } catch (error) {
+      console.log("❌ FETCH ERROR:", error);
+      Alert.alert("Erreur", "Impossible de charger les données.");
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleCellLongPress = (position: string) => {
-    // Toggle selection
-    setSelectedCells(prev => {
-      if (prev.includes(position)) {
-        return prev.filter(p => p !== position);
-      } else {
-        return [...prev, position];
-      }
-    });
+  const handleCellPress = (position: string) => {
+    if (!farmId) return;
+
+    const tree = trees[position];
+
+    // If tree has an id -> open detail; otherwise create
+    if (tree?.id) {
+      router.push(`/trees/${tree.id}`);
+    } else {
+      router.push({
+        pathname: "/trees/create",
+        params: { farmId, position },
+      });
+    }
   };
 
   const getColumnLabel = (index: number): string => {
@@ -148,38 +153,46 @@ export default function FarmDetailScreen() {
     if (!farm) return null;
 
     const cellSize = 40;
-    const rows = [];
-    
-    // Header row with column labels
+    const rows: React.ReactNode[] = [];
+
     const headerRow = [
-      <View key="corner" style={[styles.gridCell, styles.labelCell, { width: cellSize, height: cellSize }]} />
+      <View
+        key="corner"
+        style={[styles.gridCell, styles.labelCell, { width: cellSize, height: cellSize }]}
+      />,
     ];
-    
+
     for (let col = 0; col < farm.grid_cols; col++) {
       headerRow.push(
-        <View key={`col-${col}`} style={[styles.gridCell, styles.labelCell, { width: cellSize, height: cellSize }]}>
+        <View
+          key={`col-${col}`}
+          style={[styles.gridCell, styles.labelCell, { width: cellSize, height: cellSize }]}
+        >
           <Text style={styles.labelText}>{getColumnLabel(col)}</Text>
         </View>
       );
     }
+
     rows.push(
       <View key="header" style={styles.gridRow}>
         {headerRow}
       </View>
     );
 
-    // Data rows
     for (let row = 1; row <= farm.grid_rows; row++) {
-      const cells = [
-        <View key={`row-${row}`} style={[styles.gridCell, styles.labelCell, { width: cellSize, height: cellSize }]}>
+      const cells: React.ReactNode[] = [
+        <View
+          key={`row-${row}`}
+          style={[styles.gridCell, styles.labelCell, { width: cellSize, height: cellSize }]}
+        >
           <Text style={styles.labelText}>{row}</Text>
-        </View>
+        </View>,
       ];
-      
+
       for (let col = 0; col < farm.grid_cols; col++) {
         const position = `${getColumnLabel(col)}${row}`;
         const tree = trees[position];
-        
+
         cells.push(
           <TouchableOpacity
             key={position}
@@ -187,19 +200,19 @@ export default function FarmDetailScreen() {
               styles.gridCell,
               { width: cellSize, height: cellSize },
               tree && styles.hasTree,
-              tree && tree.health === 'good' && styles.healthGood,
-              tree && tree.health === 'fair' && styles.healthFair,
-              tree && tree.health === 'poor' && styles.healthPoor,
-              tree && tree.health === 'dead' && styles.healthDead,
+              tree?.health === "good" && styles.healthGood,
+              tree?.health === "fair" && styles.healthFair,
+              tree?.health === "poor" && styles.healthPoor,
+              tree?.health === "dead" && styles.healthDead,
             ]}
-            onPress={() => handleCellPress(position)}
             activeOpacity={0.7}
+            onPress={() => handleCellPress(position)}
           >
-            {tree && <Ionicons name="leaf" size={cellSize * 0.5} color="#fff" />}
+            {tree && <Ionicons name="leaf" size={20} color="#fff" />}
           </TouchableOpacity>
         );
       }
-      
+
       rows.push(
         <View key={`row-${row}`} style={styles.gridRow}>
           {cells}
@@ -211,48 +224,60 @@ export default function FarmDetailScreen() {
   };
 
   const renderList = () => {
-    const treesList = Object.values(trees).sort((a, b) => 
+    const sortedTrees = Object.values(trees).sort((a, b) =>
       a.position.localeCompare(b.position)
     );
 
-    if (treesList.length === 0) {
+    if (sortedTrees.length === 0) {
       return (
         <View style={styles.emptyState}>
           <Ionicons name="leaf-outline" size={64} color="#ccc" />
           <Text style={styles.emptyTitle}>Aucun arbre</Text>
           <Text style={styles.emptyDescription}>
-            Touchez une cellule de la grille pour ajouter un arbre
+            Touchez une cellule de la grille pour ajouter un arbre.
           </Text>
         </View>
       );
     }
 
-    const healthLabels: { [key: string]: string } = {
-      good: 'Bonne santé',
-      fair: 'Santé moyenne',
-      poor: 'Mauvaise santé',
-      dead: 'Mort',
+    const healthText: Record<string, string> = {
+      good: "Bonne santé",
+      fair: "Santé moyenne",
+      poor: "Mauvaise santé",
+      dead: "Mort",
     };
 
     return (
       <View style={styles.listContainer}>
-        {treesList.map((tree) => (
+        {sortedTrees.map((tree) => (
           <TouchableOpacity
             key={tree.id || tree.position}
             style={styles.listItem}
-            onPress={() => router.push(`/trees/${tree.id}`)}
-            activeOpacity={0.7}
+            onPress={() => (tree?.id ? router.push(`/trees/${tree.id}`) : null)}
           >
             <View style={styles.listItemHeader}>
               <Text style={styles.listItemTitle}>
-                {tree.position} - {tree.species}
+                {tree.position} — {tree.species}
               </Text>
-              <View style={[styles.healthBadge, styles[`health${tree.health.charAt(0).toUpperCase() + tree.health.slice(1)}Badge`]]}>
-                <Text style={styles.healthBadgeText}>{healthLabels[tree.health]}</Text>
+
+              <View
+                style={[
+                  styles.healthBadge,
+                  tree.health === "good" && styles.healthGoodBadge,
+                  tree.health === "fair" && styles.healthFairBadge,
+                  tree.health === "poor" && styles.healthPoorBadge,
+                  tree.health === "dead" && styles.healthDeadBadge,
+                ]}
+              >
+                <Text style={styles.healthBadgeText}>
+                  {healthText[tree.health]}
+                </Text>
               </View>
             </View>
+
             <Text style={styles.listItemDetails}>
-              {tree.variety ? `${tree.variety} • ` : ''}Planté: {new Date(tree.plant_date).toLocaleDateString('fr-FR')}
+              {tree.variety ? `${tree.variety} • ` : ""}
+              Planté : {new Date(tree.plant_date).toLocaleDateString("fr-FR")}
             </Text>
           </TouchableOpacity>
         ))}
@@ -264,7 +289,7 @@ export default function FarmDetailScreen() {
     return (
       <View style={styles.centerContainer}>
         <ActivityIndicator size="large" color="#556B2F" />
-        <Text style={styles.loadingText}>Chargement...</Text>
+        <Text style={styles.loadingText}>Chargement…</Text>
       </View>
     );
   }
@@ -272,7 +297,7 @@ export default function FarmDetailScreen() {
   if (!farm) {
     return (
       <View style={styles.centerContainer}>
-        <Text>Ferme non trouvée</Text>
+        <Text>Ferme introuvable.</Text>
       </View>
     );
   }
@@ -284,51 +309,31 @@ export default function FarmDetailScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
           <Ionicons name="arrow-back" size={24} color="#556B2F" />
         </TouchableOpacity>
+
         <View style={{ flex: 1 }}>
           <Text style={styles.headerTitle}>{farm.name}</Text>
-          <Text style={styles.headerSubtitle}>Grille {farm.grid_rows}×{farm.grid_cols}</Text>
+          <Text style={styles.headerSubtitle}>
+            Grille {farm.grid_rows}×{farm.grid_cols}
+          </Text>
         </View>
+
         <TouchableOpacity
-          onPress={() => setViewMode(viewMode === 'grid' ? 'list' : 'grid')}
+          onPress={() => setViewMode(viewMode === "grid" ? "list" : "grid")}
           style={styles.iconButton}
         >
           <Ionicons
-            name={viewMode === 'grid' ? 'list' : 'grid'}
+            name={viewMode === "grid" ? "list" : "grid"}
             size={24}
             color="#556B2F"
           />
         </TouchableOpacity>
       </View>
 
-      {/* Statistics */}
-      <View style={styles.statsCard}>
-        <View style={styles.statsGrid}>
-          <View style={styles.statItem}>
-            <Text style={styles.statValue}>{statistics.total}</Text>
-            <Text style={styles.statLabel}>Total</Text>
-          </View>
-          <View style={styles.statItem}>
-            <Text style={[styles.statValue, { color: '#28a745' }]}>{statistics.good}</Text>
-            <Text style={styles.statLabel}>Bonne</Text>
-          </View>
-          <View style={styles.statItem}>
-            <Text style={[styles.statValue, { color: '#ffc107' }]}>{statistics.fair}</Text>
-            <Text style={styles.statLabel}>Moyenne</Text>
-          </View>
-          <View style={styles.statItem}>
-            <Text style={[styles.statValue, { color: '#dc3545' }]}>{statistics.poor}</Text>
-            <Text style={styles.statLabel}>Mauvaise</Text>
-          </View>
-        </View>
-      </View>
-
       {/* Content */}
-      {viewMode === 'grid' ? (
+      {viewMode === "grid" ? (
         renderGrid()
       ) : (
-        <ScrollView style={styles.content}>
-          {renderList()}
-        </ScrollView>
+        <ScrollView style={styles.content}>{renderList()}</ScrollView>
       )}
     </View>
   );
@@ -337,27 +342,27 @@ export default function FarmDetailScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f0f5ea',
+    backgroundColor: "#f0f5ea",
   },
   centerContainer: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#f0f5ea',
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#f0f5ea",
   },
   loadingText: {
     marginTop: 12,
     fontSize: 16,
-    color: '#666',
+    color: "#666",
   },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     paddingTop: 60,
     paddingBottom: 16,
     paddingHorizontal: 16,
-    backgroundColor: '#fff',
-    shadowColor: '#000',
+    backgroundColor: "#fff",
+    shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
@@ -369,43 +374,43 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontSize: 20,
-    fontWeight: 'bold',
-    color: '#556B2F',
+    fontWeight: "bold",
+    color: "#556B2F",
   },
   headerSubtitle: {
     fontSize: 14,
-    color: '#666',
+    color: "#666",
     marginTop: 2,
   },
   iconButton: {
     padding: 4,
   },
   statsCard: {
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
     margin: 16,
     padding: 16,
     borderRadius: 12,
-    shadowColor: '#000',
+    shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 2,
   },
   statsGrid: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
+    flexDirection: "row",
+    justifyContent: "space-around",
   },
   statItem: {
-    alignItems: 'center',
+    alignItems: "center",
   },
   statValue: {
     fontSize: 24,
-    fontWeight: 'bold',
-    color: '#556B2F',
+    fontWeight: "bold",
+    color: "#556B2F",
   },
   statLabel: {
     fontSize: 12,
-    color: '#666',
+    color: "#666",
     marginTop: 4,
   },
   content: {
@@ -415,66 +420,66 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   gridRow: {
-    flexDirection: 'row',
+    flexDirection: "row",
   },
   gridCell: {
     borderWidth: 1,
-    borderColor: '#ddd',
-    backgroundColor: '#fff',
-    justifyContent: 'center',
-    alignItems: 'center',
+    borderColor: "#ddd",
+    backgroundColor: "#fff",
+    justifyContent: "center",
+    alignItems: "center",
   },
   labelCell: {
-    backgroundColor: '#f0f5ea',
+    backgroundColor: "#f0f5ea",
   },
   labelText: {
     fontSize: 12,
-    fontWeight: '600',
-    color: '#556B2F',
+    fontWeight: "600",
+    color: "#556B2F",
   },
   hasTree: {
     borderWidth: 2,
   },
   healthGood: {
-    backgroundColor: '#28a745',
-    borderColor: '#1e7e34',
+    backgroundColor: "#28a745",
+    borderColor: "#1e7e34",
   },
   healthFair: {
-    backgroundColor: '#ffc107',
-    borderColor: '#d39e00',
+    backgroundColor: "#ffc107",
+    borderColor: "#d39e00",
   },
   healthPoor: {
-    backgroundColor: '#dc3545',
-    borderColor: '#bd2130',
+    backgroundColor: "#dc3545",
+    borderColor: "#bd2130",
   },
   healthDead: {
-    backgroundColor: '#6c757d',
-    borderColor: '#545b62',
+    backgroundColor: "#6c757d",
+    borderColor: "#545b62",
   },
   listContainer: {
     padding: 16,
     gap: 12,
   },
   listItem: {
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
     padding: 16,
     borderRadius: 12,
-    shadowColor: '#000',
+    shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 2,
   },
   listItemHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
     marginBottom: 8,
   },
   listItemTitle: {
     fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
+    fontWeight: "600",
+    color: "#333",
     flex: 1,
   },
   healthBadge: {
@@ -483,41 +488,41 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   healthGoodBadge: {
-    backgroundColor: '#28a745',
+    backgroundColor: "#28a745",
   },
   healthFairBadge: {
-    backgroundColor: '#ffc107',
+    backgroundColor: "#ffc107",
   },
   healthPoorBadge: {
-    backgroundColor: '#dc3545',
+    backgroundColor: "#dc3545",
   },
   healthDeadBadge: {
-    backgroundColor: '#6c757d',
+    backgroundColor: "#6c757d",
   },
   healthBadgeText: {
     fontSize: 11,
-    fontWeight: 'bold',
-    color: '#fff',
+    fontWeight: "bold",
+    color: "#fff",
   },
   listItemDetails: {
     fontSize: 14,
-    color: '#666',
+    color: "#666",
   },
   emptyState: {
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     paddingVertical: 60,
   },
   emptyTitle: {
     fontSize: 18,
-    fontWeight: '600',
-    color: '#666',
+    fontWeight: "600",
+    color: "#666",
     marginTop: 16,
   },
   emptyDescription: {
     fontSize: 14,
-    color: '#999',
+    color: "#999",
     marginTop: 8,
-    textAlign: 'center',
+    textAlign: "center",
   },
 });
