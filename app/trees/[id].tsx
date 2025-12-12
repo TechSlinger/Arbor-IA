@@ -14,7 +14,6 @@ import {
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import axios from 'axios';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 
@@ -173,74 +172,92 @@ export default function TreeDetailScreen() {
     }
   };
 
-  const handleUpdate = async () => {
-    if (!species) {
-      Alert.alert('Erreur', 'Veuillez sélectionner une espèce');
-      return;
+ const handleUpdate = async () => {
+  if (!species) {
+    Alert.alert('Erreur', 'Veuillez sélectionner une espèce');
+    return;
+  }
+
+  try {
+    setSaving(true);
+
+    const treeData: any = {
+      species,
+      variety,
+      plant_date: plantDate,
+      health,
+      notes,
+    };
+
+    if (photo) {
+      treeData.photo = photo;
     }
 
-    try {
-      setSaving(true);
-
-      const treeData: any = {
-        species,
-        variety,
-        plant_date: plantDate,
-        health,
-        notes,
-      };
-
-      if (photo) {
-        treeData.photo = photo;
-      }
-
-      if (gpsCoords) {
-        treeData.gps_coords = gpsCoords;
-      }
-
-      await axios.put(`${EXPO_BACKEND_URL}/api/trees/${id}`, treeData);
-
-      Alert.alert('Succès', 'Arbre modifié avec succès!', [
-        {
-          text: 'OK',
-          onPress: () => router.back(),
-        },
-      ]);
-    } catch (error) {
-      console.error('Error updating tree:', error);
-      Alert.alert('Erreur', 'Impossible de modifier l\'arbre');
-    } finally {
-      setSaving(false);
+    if (gpsCoords) {
+      treeData.gps_coords = gpsCoords;
     }
-  };
 
-  const handleDelete = () => {
-    Alert.alert(
-      'Confirmer la suppression',
-      'Êtes-vous sûr de vouloir supprimer cet arbre?',
-      [
-        { text: 'Annuler', style: 'cancel' },
-        {
-          text: 'Supprimer',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await axios.delete(`${EXPO_BACKEND_URL}/api/trees/${id}`);
-              Alert.alert('Succès', 'Arbre supprimé!', [
-                {
-                  text: 'OK',
-                  onPress: () => router.back(),
-                },
-              ]);
-            } catch (error) {
-              console.error('Error deleting tree:', error);
-              Alert.alert('Erreur', 'Impossible de supprimer l\'arbre');
+    // ---- Fetch PUT replace Axios ----
+    const response = await fetch(`${EXPO_BACKEND_URL}/api/trees/${id}`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(treeData),
+    });
+
+    if (!response.ok) {
+      throw new Error("Tree update failed");
+    }
+
+    Alert.alert('Succès', 'Arbre modifié avec succès!', [
+      {
+        text: 'OK',
+        onPress: () => router.back(),
+      },
+    ]);
+  } catch (error) {
+    console.error('Error updating tree:', error);
+    Alert.alert('Erreur', 'Impossible de modifier l’arbre');
+  } finally {
+    setSaving(false);
+  }
+};
+const handleDelete = () => {
+  Alert.alert(
+    'Confirmer la suppression',
+    'Êtes-vous sûr de vouloir supprimer cet arbre?',
+    [
+      { text: 'Annuler', style: 'cancel' },
+      {
+        text: 'Supprimer',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            // ---- Fetch DELETE replace Axios ----
+            const response = await fetch(`${EXPO_BACKEND_URL}/api/trees/${id}`, {
+              method: "DELETE",
+            });
+
+            if (!response.ok) {
+              throw new Error("Tree deletion failed");
             }
-          },
+
+            Alert.alert('Succès', 'Arbre supprimé!', [
+              {
+                text: 'OK',
+                onPress: () => router.back(),
+              },
+            ]);
+          } catch (error) {
+            console.error('Error deleting tree:', error);
+            Alert.alert('Erreur', 'Impossible de supprimer l’arbre');
+          }
         },
-      ]
-    );
-  };
+      },
+    ]
+  );
+};
 
   const healthOptions = [
     { value: 'good', label: 'Bonne santé', color: '#28a745' },

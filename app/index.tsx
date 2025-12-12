@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import axios from 'axios';
 
 const EXPO_BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || '';
 
@@ -30,20 +29,32 @@ export default function HomeScreen() {
   }, []);
 
   const loadFarms = async () => {
-    try {
-      setLoading(true);
-      setError('');
-      
-      // Load from API
-      const response = await axios.get(`${EXPO_BACKEND_URL}/api/farms`);
-      setFarms(response.data);
-    } catch (err) {
-      console.error('Error loading farms:', err);
-      setError('Impossible de charger les fermes. Vérifiez votre connexion.');
-    } finally {
-      setLoading(false);
+  try {
+    setLoading(true);
+    setError('');
+
+    const response = await fetch(`${EXPO_BACKEND_URL}/api/farms`, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error("Failed to load farms");
     }
-  };
+
+    const data = await response.json();
+    setFarms(data);
+
+  } catch (err) {
+    console.error('Error loading farms:', err);
+    setError('Impossible de charger les fermes. Vérifiez votre connexion.');
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   const handleCreateFarm = () => {
     router.push('/farms/create');

@@ -11,7 +11,6 @@ import {
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import axios from 'axios';
 
 const EXPO_BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || '';
 const SCREEN_WIDTH = Dimensions.get('window').width;
@@ -70,35 +69,49 @@ export default function FarmDetailScreen() {
   }, [id]);
 
   const loadFarmData = async () => {
-    try {
-      setLoading(true);
-      
-      // Load farm details
-      const farmResponse = await axios.get(`${EXPO_BACKEND_URL}/api/farms/${id}`);
-      setFarm(farmResponse.data);
-      
-      // Load trees
-      const treesResponse = await axios.get(`${EXPO_BACKEND_URL}/api/trees`, {
-        params: { farm_id: id },
-      });
-      
-      // Convert array to object with position as key
-      const treesMap: { [key: string]: Tree } = {};
-      treesResponse.data.forEach((tree: Tree) => {
-        treesMap[tree.position] = tree;
-      });
-      setTrees(treesMap);
-      
-      // Load statistics
-      const statsResponse = await axios.get(`${EXPO_BACKEND_URL}/api/statistics/${id}`);
-      setStatistics(statsResponse.data);
-    } catch (error) {
-      console.error('Error loading farm data:', error);
-      Alert.alert('Erreur', 'Impossible de charger les données de la ferme');
-    } finally {
-      setLoading(false);
-    }
-  };
+  try {
+    setLoading(true);
+
+    // ----- Load Farm -----
+    const farmRes = await fetch(`${EXPO_BACKEND_URL}/api/farms/${id}`);
+
+    if (!farmRes.ok) throw new Error("Farm request failed");
+
+    const farmData = await farmRes.json();
+    setFarm(farmData);
+
+    // ----- Load Trees -----
+    const treesRes = await fetch(
+      `${EXPO_BACKEND_URL}/api/trees?farm_id=${id}`
+    );
+
+    if (!treesRes.ok) throw new Error("Trees request failed");
+
+    const treesData = await treesRes.json();
+
+    const treesMap: { [key: string]: Tree } = {};
+    treesData.forEach((tree: Tree) => {
+      treesMap[tree.position] = tree;
+    });
+    setTrees(treesMap);
+
+    // ----- Load Statistics -----
+    const statsRes = await fetch(
+      `${EXPO_BACKEND_URL}/api/statistics/${id}`
+    );
+
+    if (!statsRes.ok) throw new Error("Statistics request failed");
+
+    const statsData = await statsRes.json();
+    setStatistics(statsData);
+  } catch (error) {
+    console.error("Error loading farm data:", error);
+    Alert.alert("Erreur", "Impossible de charger les données de la ferme");
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   const [cellSize, setCellSize] = useState(40);
   const [selectedCells, setSelectedCells] = useState<string[]>([]);

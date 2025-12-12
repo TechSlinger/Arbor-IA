@@ -14,7 +14,6 @@ import {
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import axios from 'axios';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 
@@ -147,48 +146,60 @@ export default function CreateTreeScreen() {
     }
   };
 
-  const handleSubmit = async () => {
-    if (!species) {
-      Alert.alert('Erreur', 'Veuillez sélectionner une espèce');
-      return;
+ const handleSubmit = async () => {
+  if (!species) {
+    Alert.alert('Erreur', 'Veuillez sélectionner une espèce');
+    return;
+  }
+
+  try {
+    setLoading(true);
+
+    const treeData: any = {
+      farm_id: farmId,
+      position,
+      species,
+      variety,
+      plant_date: plantDate,
+      health,
+      notes,
+    };
+
+    if (photo) {
+      treeData.photo = photo;
     }
 
-    try {
-      setLoading(true);
-
-      const treeData: any = {
-        farm_id: farmId,
-        position,
-        species,
-        variety,
-        plant_date: plantDate,
-        health,
-        notes,
-      };
-
-      if (photo) {
-        treeData.photo = photo;
-      }
-
-      if (gpsCoords) {
-        treeData.gps_coords = gpsCoords;
-      }
-
-      await axios.post(`${EXPO_BACKEND_URL}/api/trees`, treeData);
-
-      Alert.alert('Succès', 'Arbre ajouté avec succès!', [
-        {
-          text: 'OK',
-          onPress: () => router.back(),
-        },
-      ]);
-    } catch (error) {
-      console.error('Error creating tree:', error);
-      Alert.alert('Erreur', 'Impossible d\'ajouter l\'arbre');
-    } finally {
-      setLoading(false);
+    if (gpsCoords) {
+      treeData.gps_coords = gpsCoords;
     }
-  };
+
+    // ---- Fetch POST replace Axios ----
+    const response = await fetch(`${EXPO_BACKEND_URL}/api/trees`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(treeData),
+    });
+
+    if (!response.ok) {
+      throw new Error("Tree creation failed");
+    }
+
+    Alert.alert('Succès', 'Arbre ajouté avec succès!', [
+      {
+        text: 'OK',
+        onPress: () => router.back(),
+      },
+    ]);
+  } catch (error) {
+    console.error('Error creating tree:', error);
+    Alert.alert('Erreur', 'Impossible d\'ajouter l\'arbre');
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   const healthOptions = [
     { value: 'good', label: 'Bonne santé', color: '#28a745' },

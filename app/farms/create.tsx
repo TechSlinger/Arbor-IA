@@ -13,7 +13,6 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import axios from 'axios';
 import * as Location from 'expo-location';
 
 const EXPO_BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || '';
@@ -62,54 +61,66 @@ export default function CreateFarmScreen() {
     }
   };
 
-  const handleSubmit = async () => {
-    if (!name.trim()) {
-      Alert.alert('Erreur', 'Veuillez entrer un nom pour la ferme');
-      return;
+const handleSubmit = async () => {
+  if (!name.trim()) {
+    Alert.alert('Erreur', 'Veuillez entrer un nom pour la ferme');
+    return;
+  }
+
+  const rows = parseInt(gridRows);
+  const cols = parseInt(gridCols);
+
+  if (isNaN(rows) || rows < 5 || rows > 50) {
+    Alert.alert('Erreur', 'Le nombre de lignes doit être entre 5 et 50');
+    return;
+  }
+
+  if (isNaN(cols) || cols < 5 || cols > 50) {
+    Alert.alert('Erreur', 'Le nombre de colonnes doit être entre 5 et 50');
+    return;
+  }
+
+  try {
+    setLoading(true);
+
+    const farmData: any = {
+      name: name.trim(),
+      description: description.trim(),
+      grid_rows: rows,
+      grid_cols: cols,
+    };
+
+    if (gpsCoords) {
+      farmData.gps_coords = gpsCoords;
     }
 
-    const rows = parseInt(gridRows);
-    const cols = parseInt(gridCols);
+    // ---- Fetch POST replace Axios ----
+    const response = await fetch(`${EXPO_BACKEND_URL}/api/farms`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(farmData),
+    });
 
-    if (isNaN(rows) || rows < 5 || rows > 50) {
-      Alert.alert('Erreur', 'Le nombre de lignes doit être entre 5 et 50');
-      return;
+    if (!response.ok) {
+      throw new Error("Farm creation failed");
     }
 
-    if (isNaN(cols) || cols < 5 || cols > 50) {
-      Alert.alert('Erreur', 'Le nombre de colonnes doit être entre 5 et 50');
-      return;
-    }
+    Alert.alert('Succès', 'Ferme créée avec succès!', [
+      {
+        text: 'OK',
+        onPress: () => router.back(),
+      },
+    ]);
+  } catch (error) {
+    console.error('Error creating farm:', error);
+    Alert.alert('Erreur', 'Impossible de créer la ferme');
+  } finally {
+    setLoading(false);
+  }
+};
 
-    try {
-      setLoading(true);
-
-      const farmData: any = {
-        name: name.trim(),
-        description: description.trim(),
-        grid_rows: rows,
-        grid_cols: cols,
-      };
-
-      if (gpsCoords) {
-        farmData.gps_coords = gpsCoords;
-      }
-
-      await axios.post(`${EXPO_BACKEND_URL}/api/farms`, farmData);
-
-      Alert.alert('Succès', 'Ferme créée avec succès!', [
-        {
-          text: 'OK',
-          onPress: () => router.back(),
-        },
-      ]);
-    } catch (error) {
-      console.error('Error creating farm:', error);
-      Alert.alert('Erreur', 'Impossible de créer la ferme');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   return (
     <KeyboardAvoidingView
