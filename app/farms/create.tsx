@@ -15,7 +15,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 
-const EXPO_BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || '';
+const EXPO_BACKEND_URL = "https://mobile-mirror-16.preview.emergentagent.com";
 
 export default function CreateFarmScreen() {
   const router = useRouter();

@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
-const EXPO_BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || '';
+const EXPO_BACKEND_URL = "https://mobile-mirror-16.preview.emergentagent.com";
 
 interface Farm {
   id: string;
