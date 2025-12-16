@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -16,7 +16,6 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
-import { useRef } from 'react';
 
 const EXPO_BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'https://mobile-mirror-16.preview.emergentagent.com';
 const TREE_SPECIES = [
@@ -68,8 +67,11 @@ export default function TreeDetailScreen() {
   const loadTree = async () => {
     try {
       setLoading(true);
-      const response = await axios.get(`${EXPO_BACKEND_URL}/api/trees/${id}`);
-      const tree = response.data;
+      const response = await fetch(`${EXPO_BACKEND_URL}/api/trees/${id}`);
+      if (!response.ok) {
+        throw new Error('Failed to load tree');
+      }
+      const tree = await response.json();
       
       setSpecies(tree.species);
       setVariety(tree.variety || '');
@@ -293,6 +295,37 @@ const handleDelete = () => {
         </View>
 
         <View style={styles.content}>
+          {/* Quick Actions */}
+          <View style={styles.quickActions}>
+            <TouchableOpacity
+              style={styles.quickActionButton}
+              onPress={() => router.push(`/interventions/${id}`)}
+            >
+              <View style={[styles.quickActionIcon, { backgroundColor: '#17a2b8' }]}>
+                <Ionicons name="clipboard-outline" size={20} color="#fff" />
+              </View>
+              <Text style={styles.quickActionText}>Interventions</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.quickActionButton}
+              onPress={() => router.push(`/photos/${id}`)}
+            >
+              <View style={[styles.quickActionIcon, { backgroundColor: '#6f42c1' }]}>
+                <Ionicons name="images-outline" size={20} color="#fff" />
+              </View>
+              <Text style={styles.quickActionText}>Photos</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.quickActionButton}
+              onPress={() => router.push(`/duplicate/${id}`)}
+            >
+              <View style={[styles.quickActionIcon, { backgroundColor: '#fd7e14' }]}>
+                <Ionicons name="copy-outline" size={20} color="#fff" />
+              </View>
+              <Text style={styles.quickActionText}>Dupliquer</Text>
+            </TouchableOpacity>
+          </View>
+
           {/* Photo Section */}
           <View style={styles.photoSection}>
             {photo ? (
@@ -507,6 +540,35 @@ const styles = StyleSheet.create({
   },
   content: {
     padding: 16,
+  },
+  quickActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    backgroundColor: '#fff',
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  quickActionButton: {
+    alignItems: 'center',
+    gap: 8,
+  },
+  quickActionIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  quickActionText: {
+    fontSize: 12,
+    color: '#666',
+    fontWeight: '500',
   },
   photoSection: {
     marginBottom: 24,
