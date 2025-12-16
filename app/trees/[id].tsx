@@ -296,6 +296,37 @@ const handleDelete = () => {
         </View>
 
         <View style={styles.content}>
+          {/* Quick Actions */}
+          <View style={styles.quickActions}>
+            <TouchableOpacity
+              style={styles.quickActionButton}
+              onPress={() => router.push(`/interventions/${id}`)}
+            >
+              <View style={[styles.quickActionIcon, { backgroundColor: '#17a2b8' }]}>
+                <Ionicons name="clipboard-outline" size={20} color="#fff" />
+              </View>
+              <Text style={styles.quickActionText}>Interventions</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.quickActionButton}
+              onPress={() => router.push(`/photos/${id}`)}
+            >
+              <View style={[styles.quickActionIcon, { backgroundColor: '#6f42c1' }]}>
+                <Ionicons name="images-outline" size={20} color="#fff" />
+              </View>
+              <Text style={styles.quickActionText}>Photos</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.quickActionButton}
+              onPress={() => router.push(`/duplicate/${id}`)}
+            >
+              <View style={[styles.quickActionIcon, { backgroundColor: '#fd7e14' }]}>
+                <Ionicons name="copy-outline" size={20} color="#fff" />
+              </View>
+              <Text style={styles.quickActionText}>Dupliquer</Text>
+            </TouchableOpacity>
+          </View>
+
           {/* Photo Section */}
           <View style={styles.photoSection}>
             {photo ? (
