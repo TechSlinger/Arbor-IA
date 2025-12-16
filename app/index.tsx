@@ -182,11 +182,17 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 3,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   logoContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
+  },
+  menuButton: {
+    padding: 8,
   },
   logoIcon: {
     width: 56,
