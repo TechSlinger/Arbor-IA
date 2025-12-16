@@ -159,13 +159,19 @@ export default function StatsScreen() {
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>État de santé</Text>
               <View style={styles.statsGrid}>
-                {Object.entries(healthLabels).map(([key, { label, color }]) => (
-                  <View key={key} style={styles.statCard}>
-                    <View style={[styles.statIndicator, { backgroundColor: color }]} />
-                    <Text style={styles.statValue}>{stats[key as keyof Statistics] || 0}</Text>
-                    <Text style={styles.statLabel}>{label}</Text>
-                  </View>
-                ))}
+                {Object.entries(healthLabels).map(([key, { label, color }]) => {
+                  const value = key === 'good' ? stats.good :
+                               key === 'fair' ? stats.fair :
+                               key === 'poor' ? stats.poor :
+                               key === 'dead' ? stats.dead : 0;
+                  return (
+                    <View key={key} style={styles.statCard}>
+                      <View style={[styles.statIndicator, { backgroundColor: color }]} />
+                      <Text style={styles.statValue}>{value}</Text>
+                      <Text style={styles.statLabel}>{label}</Text>
+                    </View>
+                  );
+                })}
               </View>
             </View>
 
