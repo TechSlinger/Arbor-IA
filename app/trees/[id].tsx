@@ -68,8 +68,11 @@ export default function TreeDetailScreen() {
   const loadTree = async () => {
     try {
       setLoading(true);
-      const response = await axios.get(`${EXPO_BACKEND_URL}/api/trees/${id}`);
-      const tree = response.data;
+      const response = await fetch(`${EXPO_BACKEND_URL}/api/trees/${id}`);
+      if (!response.ok) {
+        throw new Error('Failed to load tree');
+      }
+      const tree = await response.json();
       
       setSpecies(tree.species);
       setVariety(tree.variety || '');
