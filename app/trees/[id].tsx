@@ -542,6 +542,35 @@ const styles = StyleSheet.create({
   content: {
     padding: 16,
   },
+  quickActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    backgroundColor: '#fff',
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  quickActionButton: {
+    alignItems: 'center',
+    gap: 8,
+  },
+  quickActionIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  quickActionText: {
+    fontSize: 12,
+    color: '#666',
+    fontWeight: '500',
+  },
   photoSection: {
     marginBottom: 24,
     alignItems: 'center',
