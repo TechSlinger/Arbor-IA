@@ -220,7 +220,7 @@ export default function TreeDetailScreen() {
     ]);
   } catch (error) {
     console.error('Error updating tree:', error);
-    Alert.alert('Erreur', 'Impossible de modifier l'arbre');
+    Alert.alert('Erreur', "Impossible de modifier l'arbre");
   } finally {
     setSaving(false);
   }
