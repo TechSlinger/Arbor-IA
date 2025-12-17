@@ -67,6 +67,41 @@ export default function FarmDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
 
+  const handleDeleteFarm = () => {
+    Alert.alert(
+      "Supprimer la ferme",
+      "Êtes-vous sûr de vouloir supprimer cette ferme et tous ses arbres ?",
+      [
+        { text: "Annuler", style: "cancel" },
+        {
+          text: "Supprimer",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              const response = await fetch(`${EXPO_BACKEND_URL}/api/farms/${farmId}`, {
+                method: "DELETE",
+              });
+
+              if (!response.ok) {
+                throw new Error("Farm deletion failed");
+              }
+
+              Alert.alert("Succès", "Ferme supprimée!", [
+                {
+                  text: "OK",
+                  onPress: () => router.back(),
+                },
+              ]);
+            } catch (error) {
+              console.error("Error deleting farm:", error);
+              Alert.alert("Erreur", "Impossible de supprimer la ferme");
+            }
+          },
+        },
+      ]
+    );
+  };
+
   useEffect(() => {
     if (!farmId) {
       console.log("❌ ERROR: farmId is missing");
