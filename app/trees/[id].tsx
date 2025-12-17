@@ -220,7 +220,7 @@ export default function TreeDetailScreen() {
     ]);
   } catch (error) {
     console.error('Error updating tree:', error);
-    Alert.alert('Erreur', 'Impossible de modifier l’arbre');
+    Alert.alert('Erreur', 'Impossible de modifier l'arbre');
   } finally {
     setSaving(false);
   }
@@ -253,7 +253,7 @@ const handleDelete = () => {
             ]);
           } catch (error) {
             console.error('Error deleting tree:', error);
-            Alert.alert('Erreur', 'Impossible de supprimer l’arbre');
+            Alert.alert('Erreur', "Impossible de supprimer l'arbre");
           }
         },
       },
