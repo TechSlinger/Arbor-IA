@@ -106,7 +106,7 @@ export default function InterventionsScreen() {
       setNewType('');
       setNewNotes('');
       loadData();
-      Alert.alert('Succès', 'Intervention ajoutée');
+      Alert.alert('Succès', 'Intervention ajoutée avec succès');
     } catch (error) {
       console.error('Error adding intervention:', error);
       Alert.alert('Erreur', 'Impossible d\'ajouter l\'intervention');
@@ -130,9 +130,10 @@ export default function InterventionsScreen() {
                 method: 'DELETE',
               });
               if (!response.ok) throw new Error('Delete failed');
+              Alert.alert('Succès', 'Intervention supprimée avec succès');
               loadData();
             } catch (error) {
-              Alert.alert('Erreur', 'Impossible de supprimer');
+              Alert.alert('Erreur', 'Impossible de supprimer l\'intervention');
             }
           },
         },

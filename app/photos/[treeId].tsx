@@ -126,7 +126,7 @@ export default function PhotosScreen() {
       if (!response.ok) throw new Error('Upload failed');
       
       loadTree();
-      Alert.alert('Succès', 'Photo ajoutée');
+      Alert.alert('Succès', 'Photo ajoutée avec succès');
     } catch (error) {
       console.error('Error uploading photo:', error);
       Alert.alert('Erreur', 'Impossible d\'ajouter la photo');
@@ -150,6 +150,7 @@ export default function PhotosScreen() {
                 method: 'DELETE',
               });
               if (!response.ok) throw new Error('Delete failed');
+              Alert.alert('Succès', 'Photo supprimée avec succès');
               setSelectedPhoto(null);
               loadTree();
             } catch (error) {
