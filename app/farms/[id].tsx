@@ -187,7 +187,8 @@ export default function FarmDetailScreen() {
       ]);
     } catch (error) {
       console.log("❌ DELETE ERROR:", error);
-      Alert.alert("Erreur", `Impossible de supprimer la ferme: ${error.message}`);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      Alert.alert("Erreur", `Impossible de supprimer la ferme: ${errorMessage}`);
     } finally {
       setDeleting(false);
     }
