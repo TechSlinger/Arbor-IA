@@ -150,6 +150,7 @@ export default function PhotosScreen() {
                 method: 'DELETE',
               });
               if (!response.ok) throw new Error('Delete failed');
+              Alert.alert('Succès', 'Photo supprimée avec succès');
               setSelectedPhoto(null);
               loadTree();
             } catch (error) {
