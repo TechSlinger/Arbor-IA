@@ -3,10 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
-from pymongo import MongoClient
-from bson import ObjectId
 import os
 import hashlib
+import uuid
+import pymysql
+from contextlib import contextmanager
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -22,14 +23,34 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# MongoDB connection
-MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
-client = MongoClient(MONGO_URL)
-db = client.arboria_db
-farms_collection = db.farms
-trees_collection = db.trees
-users_collection = db.users
-interventions_collection = db.interventions
+# MySQL connection configuration
+MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
+MYSQL_USER = os.getenv("MYSQL_USER", "root")
+MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
+MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "arboria_db")
+
+@contextmanager
+def get_db():
+    """Context manager for database connections"""
+    conn = pymysql.connect(
+        host=MYSQL_HOST,
+        user=MYSQL_USER,
+        password=MYSQL_PASSWORD,
+        database=MYSQL_DATABASE,
+        charset='utf8mb4',
+        cursorclass=pymysql.cursors.DictCursor
+    )
+    try:
+        yield conn
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
+
+def generate_id():
+    return str(uuid.uuid4())
 
 # Pydantic Models
 class GPSCoords(BaseModel):
@@ -52,14 +73,13 @@ class FarmUpdate(BaseModel):
 
 class Tree(BaseModel):
     farm_id: str
-    position: str  # e.g., "A1", "B5"
+    position: str
     species: str
     variety: Optional[str] = None
     plant_date: str
-    health: str  # "good", "fair", "poor", "dead"
+    health: str = "good"
     notes: Optional[str] = None
-    photo: Optional[str] = None  # base64 encoded
-    photos: Optional[List[str]] = None  # multiple photos support
+    photo: Optional[str] = None
     gps_coords: Optional[GPSCoords] = None
     synced: bool = True
     origin: Optional[str] = None
@@ -72,27 +92,16 @@ class TreeUpdate(BaseModel):
     health: Optional[str] = None
     notes: Optional[str] = None
     photo: Optional[str] = None
-    photos: Optional[List[str]] = None
     gps_coords: Optional[GPSCoords] = None
     synced: Optional[bool] = None
     origin: Optional[str] = None
 
-class SyncBatch(BaseModel):
-    trees: List[dict]
-
-# Intervention Models
 class Intervention(BaseModel):
     tree_id: str
-    type: str  # "watering", "treatment", "pruning", "harvest", "fertilization", "observation"
+    type: str
     notes: Optional[str] = None
     date: Optional[str] = None
 
-class InterventionUpdate(BaseModel):
-    type: Optional[str] = None
-    notes: Optional[str] = None
-    date: Optional[str] = None
-
-# User/Auth Models
 class UserRegister(BaseModel):
     phone: str
     password: str
@@ -101,24 +110,13 @@ class UserLogin(BaseModel):
     phone: str
     password: str
 
-# Export/Import Models
-class ExportData(BaseModel):
-    farms: List[dict]
-    trees: List[dict]
-    interventions: List[dict]
-
-# Duplicate Tree Model
 class DuplicateTree(BaseModel):
     source_tree_id: str
     target_position: str
     target_farm_id: Optional[str] = None
 
-# Helper function to convert ObjectId to string
-def serialize_doc(doc):
-    if doc and "_id" in doc:
-        doc["id"] = str(doc["_id"])
-        del doc["_id"]
-    return doc
+class SyncBatch(BaseModel):
+    trees: List[dict]
 
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
@@ -126,277 +124,546 @@ def hash_password(password: str) -> str:
 # Root endpoint
 @app.get("/")
 def read_root():
-    return {"message": "ArborIA API - Gestion Arboricole", "version": "2.0.0"}
+    return {"message": "ArborIA API - Gestion Arboricole (MySQL)", "version": "2.1.0"}
 
 # ============== AUTH ENDPOINTS ==============
 
 @app.post("/api/auth/register")
 def register_user(user: UserRegister):
-    # Check if user already exists
-    existing = users_collection.find_one({"phone": user.phone})
-    if existing:
-        raise HTTPException(status_code=400, detail="Ce numéro de téléphone est déjà utilisé")
-    
-    user_dict = {
-        "phone": user.phone,
-        "password_hash": hash_password(user.password),
-        "created_at": datetime.utcnow().isoformat()
-    }
-    
-    result = users_collection.insert_one(user_dict)
-    
-    return {
-        "id": str(result.inserted_id),
-        "phone": user.phone,
-        "message": "Inscription réussie"
-    }
+    with get_db() as conn:
+        cursor = conn.cursor()
+        
+        # Check if user exists
+        cursor.execute("SELECT id FROM users WHERE phone = %s", (user.phone,))
+        if cursor.fetchone():
+            raise HTTPException(status_code=400, detail="Ce numéro de téléphone est déjà utilisé")
+        
+        user_id = generate_id()
+        cursor.execute(
+            "INSERT INTO users (id, phone, password_hash) VALUES (%s, %s, %s)",
+            (user_id, user.phone, hash_password(user.password))
+        )
+        
+        return {
+            "id": user_id,
+            "phone": user.phone,
+            "message": "Inscription réussie"
+        }
 
 @app.post("/api/auth/login")
 def login_user(user: UserLogin):
-    db_user = users_collection.find_one({"phone": user.phone})
-    
-    if not db_user:
-        raise HTTPException(status_code=401, detail="Numéro de téléphone ou mot de passe incorrect")
-    
-    if db_user["password_hash"] != hash_password(user.password):
-        raise HTTPException(status_code=401, detail="Numéro de téléphone ou mot de passe incorrect")
-    
-    return {
-        "id": str(db_user["_id"]),
-        "phone": db_user["phone"],
-        "message": "Connexion réussie"
-    }
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, phone, password_hash FROM users WHERE phone = %s", (user.phone,))
+        db_user = cursor.fetchone()
+        
+        if not db_user or db_user["password_hash"] != hash_password(user.password):
+            raise HTTPException(status_code=401, detail="Numéro de téléphone ou mot de passe incorrect")
+        
+        return {
+            "id": db_user["id"],
+            "phone": db_user["phone"],
+            "message": "Connexion réussie"
+        }
 
 @app.get("/api/auth/demo")
 def demo_login():
-    """Demo login - allows testing without real account"""
-    # Check if demo user exists, create if not
-    demo_user = users_collection.find_one({"phone": "demo"})
-    
-    if not demo_user:
-        user_dict = {
-            "phone": "demo",
-            "password_hash": hash_password("demo123"),
-            "created_at": datetime.utcnow().isoformat(),
-            "is_demo": True
-        }
-        result = users_collection.insert_one(user_dict)
-        return {
-            "id": str(result.inserted_id),
-            "phone": "demo",
-            "is_demo": True,
-            "message": "Connexion démo réussie"
-        }
-    
-    return {
-        "id": str(demo_user["_id"]),
-        "phone": "demo",
-        "is_demo": True,
-        "message": "Connexion démo réussie"
-    }
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, phone FROM users WHERE phone = 'demo'")
+        demo_user = cursor.fetchone()
+        
+        if not demo_user:
+            user_id = generate_id()
+            cursor.execute(
+                "INSERT INTO users (id, phone, password_hash, is_demo) VALUES (%s, 'demo', %s, TRUE)",
+                (user_id, hash_password("demo123"))
+            )
+            return {"id": user_id, "phone": "demo", "is_demo": True, "message": "Connexion démo réussie"}
+        
+        return {"id": demo_user["id"], "phone": "demo", "is_demo": True, "message": "Connexion démo réussie"}
 
 # ============== FARM ENDPOINTS ==============
 
 @app.post("/api/farms")
 def create_farm(farm: Farm):
-    farm_dict = farm.dict()
-    farm_dict["created_at"] = datetime.utcnow().isoformat()
-    farm_dict["updated_at"] = datetime.utcnow().isoformat()
-
-    result = farms_collection.insert_one(farm_dict)
-    farm_dict["id"] = str(result.inserted_id)
-    del farm_dict["_id"]
-
-    return farm_dict
+    with get_db() as conn:
+        cursor = conn.cursor()
+        farm_id = generate_id()
+        now = datetime.utcnow()
+        
+        gps_lat = farm.gps_coords.latitude if farm.gps_coords else None
+        gps_lng = farm.gps_coords.longitude if farm.gps_coords else None
+        
+        cursor.execute("""
+            INSERT INTO farms (id, name, description, grid_rows, grid_cols, gps_latitude, gps_longitude, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (farm_id, farm.name, farm.description, farm.grid_rows, farm.grid_cols, gps_lat, gps_lng, now, now))
+        
+        return {
+            "id": farm_id,
+            "name": farm.name,
+            "description": farm.description,
+            "grid_rows": farm.grid_rows,
+            "grid_cols": farm.grid_cols,
+            "gps_coords": farm.gps_coords.dict() if farm.gps_coords else None,
+            "created_at": now.isoformat(),
+            "updated_at": now.isoformat(),
+            "message": "Ferme créée avec succès"
+        }
 
 @app.get("/api/farms")
 def get_farms():
-    farms = list(farms_collection.find())
-    return [serialize_doc(farm) for farm in farms]
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM farms ORDER BY created_at DESC")
+        farms = cursor.fetchall()
+        
+        result = []
+        for farm in farms:
+            gps_coords = None
+            if farm["gps_latitude"] and farm["gps_longitude"]:
+                gps_coords = {"latitude": farm["gps_latitude"], "longitude": farm["gps_longitude"]}
+            
+            result.append({
+                "id": farm["id"],
+                "name": farm["name"],
+                "description": farm["description"],
+                "grid_rows": farm["grid_rows"],
+                "grid_cols": farm["grid_cols"],
+                "gps_coords": gps_coords,
+                "created_at": farm["created_at"].isoformat() if farm["created_at"] else None,
+                "updated_at": farm["updated_at"].isoformat() if farm["updated_at"] else None
+            })
+        
+        return result
 
 @app.get("/api/farms/{farm_id}")
 def get_farm(farm_id: str):
-    try:
-        farm = farms_collection.find_one({"_id": ObjectId(farm_id)})
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM farms WHERE id = %s", (farm_id,))
+        farm = cursor.fetchone()
+        
         if not farm:
-            raise HTTPException(status_code=404, detail="Farm not found")
-        return serialize_doc(farm)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=404, detail="Ferme non trouvée")
+        
+        gps_coords = None
+        if farm["gps_latitude"] and farm["gps_longitude"]:
+            gps_coords = {"latitude": farm["gps_latitude"], "longitude": farm["gps_longitude"]}
+        
+        return {
+            "id": farm["id"],
+            "name": farm["name"],
+            "description": farm["description"],
+            "grid_rows": farm["grid_rows"],
+            "grid_cols": farm["grid_cols"],
+            "gps_coords": gps_coords,
+            "created_at": farm["created_at"].isoformat() if farm["created_at"] else None,
+            "updated_at": farm["updated_at"].isoformat() if farm["updated_at"] else None
+        }
 
 @app.put("/api/farms/{farm_id}")
 def update_farm(farm_id: str, farm_update: FarmUpdate):
-    try:
-        update_data = {k: v for k, v in farm_update.dict().items() if v is not None}
-        update_data["updated_at"] = datetime.utcnow().isoformat()
-
-        result = farms_collection.update_one(
-            {"_id": ObjectId(farm_id)},
-            {"$set": update_data}
-        )
-
-        if result.matched_count == 0:
-            raise HTTPException(status_code=404, detail="Farm not found")
-
-        farm = farms_collection.find_one({"_id": ObjectId(farm_id)})
-        return serialize_doc(farm)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    with get_db() as conn:
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT id FROM farms WHERE id = %s", (farm_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Ferme non trouvée")
+        
+        updates = []
+        values = []
+        
+        if farm_update.name is not None:
+            updates.append("name = %s")
+            values.append(farm_update.name)
+        if farm_update.description is not None:
+            updates.append("description = %s")
+            values.append(farm_update.description)
+        if farm_update.grid_rows is not None:
+            updates.append("grid_rows = %s")
+            values.append(farm_update.grid_rows)
+        if farm_update.grid_cols is not None:
+            updates.append("grid_cols = %s")
+            values.append(farm_update.grid_cols)
+        if farm_update.gps_coords is not None:
+            updates.append("gps_latitude = %s")
+            updates.append("gps_longitude = %s")
+            values.append(farm_update.gps_coords.latitude)
+            values.append(farm_update.gps_coords.longitude)
+        
+        if updates:
+            updates.append("updated_at = %s")
+            values.append(datetime.utcnow())
+            values.append(farm_id)
+            
+            cursor.execute(f"UPDATE farms SET {', '.join(updates)} WHERE id = %s", values)
+        
+        return get_farm(farm_id)
 
 @app.delete("/api/farms/{farm_id}")
 def delete_farm(farm_id: str):
-    try:
-        # Delete all interventions for trees in this farm
-        trees = list(trees_collection.find({"farm_id": farm_id}))
-        tree_ids = [str(tree["_id"]) for tree in trees]
-        interventions_collection.delete_many({"tree_id": {"$in": tree_ids}})
+    with get_db() as conn:
+        cursor = conn.cursor()
         
-        # Delete all trees associated with this farm
-        trees_collection.delete_many({"farm_id": farm_id})
-
-        # Delete the farm
-        result = farms_collection.delete_one({"_id": ObjectId(farm_id)})
-
-        if result.deleted_count == 0:
-            raise HTTPException(status_code=404, detail="Farm not found")
-
-        return {"message": "Farm and associated trees deleted successfully"}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        cursor.execute("SELECT id FROM farms WHERE id = %s", (farm_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Ferme non trouvée")
+        
+        # Les arbres et interventions sont supprimés automatiquement via CASCADE
+        cursor.execute("DELETE FROM farms WHERE id = %s", (farm_id,))
+        
+        return {"message": "Ferme et arbres associés supprimés avec succès", "success": True}
 
 # ============== TREE ENDPOINTS ==============
 
 @app.post("/api/trees")
 def create_tree(tree: Tree):
-    # Check if position already has a tree
-    existing = trees_collection.find_one({
-        "farm_id": tree.farm_id,
-        "position": tree.position
-    })
-
-    if existing:
-        raise HTTPException(
-            status_code=400,
-            detail=f"A tree already exists at position {tree.position}"
+    with get_db() as conn:
+        cursor = conn.cursor()
+        
+        # Check if position exists
+        cursor.execute(
+            "SELECT id FROM trees WHERE farm_id = %s AND position = %s",
+            (tree.farm_id, tree.position)
         )
+        if cursor.fetchone():
+            raise HTTPException(status_code=400, detail=f"Un arbre existe déjà à la position {tree.position}")
+        
+        tree_id = generate_id()
+        now = datetime.utcnow()
+        
+        gps_lat = tree.gps_coords.latitude if tree.gps_coords else None
+        gps_lng = tree.gps_coords.longitude if tree.gps_coords else None
+        
+        cursor.execute("""
+            INSERT INTO trees (id, farm_id, position, species, variety, plant_date, health, notes, photo, origin, gps_latitude, gps_longitude, synced, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (tree_id, tree.farm_id, tree.position, tree.species, tree.variety, tree.plant_date, tree.health, tree.notes, tree.photo, tree.origin, gps_lat, gps_lng, tree.synced, now, now))
+        
+        # Add photo to tree_photos if provided
+        if tree.photo:
+            photo_id = generate_id()
+            cursor.execute(
+                "INSERT INTO tree_photos (id, tree_id, photo) VALUES (%s, %s, %s)",
+                (photo_id, tree_id, tree.photo)
+            )
+        
+        return {
+            "id": tree_id,
+            "farm_id": tree.farm_id,
+            "position": tree.position,
+            "species": tree.species,
+            "variety": tree.variety,
+            "plant_date": tree.plant_date,
+            "health": tree.health,
+            "notes": tree.notes,
+            "photo": tree.photo,
+            "photos": [tree.photo] if tree.photo else [],
+            "origin": tree.origin,
+            "gps_coords": tree.gps_coords.dict() if tree.gps_coords else None,
+            "synced": tree.synced,
+            "created_at": now.isoformat(),
+            "updated_at": now.isoformat(),
+            "message": "Arbre créé avec succès"
+        }
 
-    tree_dict = tree.dict()
-    tree_dict["created_at"] = datetime.utcnow().isoformat()
-    tree_dict["updated_at"] = datetime.utcnow().isoformat()
+def format_tree(tree, photos=None):
+    gps_coords = None
+    if tree.get("gps_latitude") and tree.get("gps_longitude"):
+        gps_coords = {"latitude": tree["gps_latitude"], "longitude": tree["gps_longitude"]}
     
-    # Initialize photos array if not provided
-    if not tree_dict.get("photos"):
-        tree_dict["photos"] = []
-        if tree_dict.get("photo"):
-            tree_dict["photos"].append(tree_dict["photo"])
-
-    result = trees_collection.insert_one(tree_dict)
-    tree_dict["id"] = str(result.inserted_id)
-    del tree_dict["_id"]
-
-    return tree_dict
+    plant_date = tree.get("plant_date")
+    if plant_date and hasattr(plant_date, 'isoformat'):
+        plant_date = plant_date.isoformat()
+    
+    return {
+        "id": tree["id"],
+        "farm_id": tree["farm_id"],
+        "position": tree["position"],
+        "species": tree["species"],
+        "variety": tree.get("variety"),
+        "plant_date": str(plant_date) if plant_date else None,
+        "health": tree["health"],
+        "notes": tree.get("notes"),
+        "photo": tree.get("photo"),
+        "photos": photos or [],
+        "origin": tree.get("origin"),
+        "gps_coords": gps_coords,
+        "synced": bool(tree.get("synced", True)),
+        "created_at": tree["created_at"].isoformat() if tree.get("created_at") else None,
+        "updated_at": tree["updated_at"].isoformat() if tree.get("updated_at") else None
+    }
 
 @app.get("/api/trees")
 def get_trees(farm_id: Optional[str] = None):
-    query = {}
-    if farm_id:
-        query["farm_id"] = farm_id
-
-    trees = list(trees_collection.find(query))
-    return [serialize_doc(tree) for tree in trees]
+    with get_db() as conn:
+        cursor = conn.cursor()
+        
+        if farm_id:
+            cursor.execute("SELECT * FROM trees WHERE farm_id = %s ORDER BY position", (farm_id,))
+        else:
+            cursor.execute("SELECT * FROM trees ORDER BY created_at DESC")
+        
+        trees = cursor.fetchall()
+        
+        result = []
+        for tree in trees:
+            cursor.execute("SELECT photo FROM tree_photos WHERE tree_id = %s", (tree["id"],))
+            photos = [p["photo"] for p in cursor.fetchall()]
+            result.append(format_tree(tree, photos))
+        
+        return result
 
 @app.get("/api/trees/{tree_id}")
 def get_tree(tree_id: str):
-    try:
-        tree = trees_collection.find_one({"_id": ObjectId(tree_id)})
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM trees WHERE id = %s", (tree_id,))
+        tree = cursor.fetchone()
+        
         if not tree:
-            raise HTTPException(status_code=404, detail="Tree not found")
-        return serialize_doc(tree)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=404, detail="Arbre non trouvé")
+        
+        cursor.execute("SELECT photo FROM tree_photos WHERE tree_id = %s", (tree_id,))
+        photos = [p["photo"] for p in cursor.fetchall()]
+        
+        return format_tree(tree, photos)
 
 @app.put("/api/trees/{tree_id}")
 def update_tree(tree_id: str, tree_update: TreeUpdate):
-    try:
-        update_data = {k: v for k, v in tree_update.dict().items() if v is not None}
-        update_data["updated_at"] = datetime.utcnow().isoformat()
-
-        result = trees_collection.update_one(
-            {"_id": ObjectId(tree_id)},
-            {"$set": update_data}
-        )
-
-        if result.matched_count == 0:
-            raise HTTPException(status_code=404, detail="Tree not found")
-
-        tree = trees_collection.find_one({"_id": ObjectId(tree_id)})
-        return serialize_doc(tree)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    with get_db() as conn:
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT id FROM trees WHERE id = %s", (tree_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Arbre non trouvé")
+        
+        updates = []
+        values = []
+        
+        if tree_update.position is not None:
+            updates.append("position = %s")
+            values.append(tree_update.position)
+        if tree_update.species is not None:
+            updates.append("species = %s")
+            values.append(tree_update.species)
+        if tree_update.variety is not None:
+            updates.append("variety = %s")
+            values.append(tree_update.variety)
+        if tree_update.plant_date is not None:
+            updates.append("plant_date = %s")
+            values.append(tree_update.plant_date)
+        if tree_update.health is not None:
+            updates.append("health = %s")
+            values.append(tree_update.health)
+        if tree_update.notes is not None:
+            updates.append("notes = %s")
+            values.append(tree_update.notes)
+        if tree_update.photo is not None:
+            updates.append("photo = %s")
+            values.append(tree_update.photo)
+        if tree_update.origin is not None:
+            updates.append("origin = %s")
+            values.append(tree_update.origin)
+        if tree_update.gps_coords is not None:
+            updates.append("gps_latitude = %s")
+            updates.append("gps_longitude = %s")
+            values.append(tree_update.gps_coords.latitude)
+            values.append(tree_update.gps_coords.longitude)
+        if tree_update.synced is not None:
+            updates.append("synced = %s")
+            values.append(tree_update.synced)
+        
+        if updates:
+            updates.append("updated_at = %s")
+            values.append(datetime.utcnow())
+            values.append(tree_id)
+            
+            cursor.execute(f"UPDATE trees SET {', '.join(updates)} WHERE id = %s", values)
+        
+        result = get_tree(tree_id)
+        result["message"] = "Arbre modifié avec succès"
+        return result
 
 @app.delete("/api/trees/{tree_id}")
 def delete_tree(tree_id: str):
-    try:
-        # Delete all interventions for this tree
-        interventions_collection.delete_many({"tree_id": tree_id})
+    with get_db() as conn:
+        cursor = conn.cursor()
         
-        result = trees_collection.delete_one({"_id": ObjectId(tree_id)})
+        cursor.execute("SELECT id FROM trees WHERE id = %s", (tree_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Arbre non trouvé")
+        
+        cursor.execute("DELETE FROM trees WHERE id = %s", (tree_id,))
+        
+        return {"message": "Arbre supprimé avec succès", "success": True}
 
-        if result.deleted_count == 0:
-            raise HTTPException(status_code=404, detail="Tree not found")
-
-        return {"message": "Tree deleted successfully"}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-# ============== DUPLICATE TREE ENDPOINT ==============
+# ============== DUPLICATE TREE ==============
 
 @app.post("/api/trees/duplicate")
 def duplicate_tree(data: DuplicateTree):
-    try:
-        # Get source tree
-        source_tree = trees_collection.find_one({"_id": ObjectId(data.source_tree_id)})
-        if not source_tree:
-            raise HTTPException(status_code=404, detail="Source tree not found")
+    with get_db() as conn:
+        cursor = conn.cursor()
         
-        target_farm_id = data.target_farm_id or source_tree["farm_id"]
+        cursor.execute("SELECT * FROM trees WHERE id = %s", (data.source_tree_id,))
+        source = cursor.fetchone()
         
-        # Check if position is available
-        existing = trees_collection.find_one({
-            "farm_id": target_farm_id,
-            "position": data.target_position
-        })
-        if existing:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Position {data.target_position} is already occupied"
-            )
+        if not source:
+            raise HTTPException(status_code=404, detail="Arbre source non trouvé")
         
-        # Create new tree with source data
-        new_tree = {
+        target_farm_id = data.target_farm_id or source["farm_id"]
+        
+        cursor.execute(
+            "SELECT id FROM trees WHERE farm_id = %s AND position = %s",
+            (target_farm_id, data.target_position)
+        )
+        if cursor.fetchone():
+            raise HTTPException(status_code=400, detail=f"La position {data.target_position} est déjà occupée")
+        
+        tree_id = generate_id()
+        now = datetime.utcnow()
+        
+        cursor.execute("""
+            INSERT INTO trees (id, farm_id, position, species, variety, plant_date, health, notes, origin, synced, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, 'good', %s, %s, TRUE, %s, %s)
+        """, (tree_id, target_farm_id, data.target_position, source["species"], source["variety"], 
+              now.date(), f"Dupliqué de {source['position']}", source["origin"], now, now))
+        
+        return {
+            "id": tree_id,
             "farm_id": target_farm_id,
             "position": data.target_position,
-            "species": source_tree["species"],
-            "variety": source_tree.get("variety"),
-            "plant_date": datetime.utcnow().isoformat().split('T')[0],
+            "species": source["species"],
+            "variety": source["variety"],
+            "plant_date": str(now.date()),
             "health": "good",
-            "notes": f"Dupliqué de {source_tree['position']}",
-            "origin": source_tree.get("origin"),
+            "notes": f"Dupliqué de {source['position']}",
+            "origin": source["origin"],
             "photos": [],
             "synced": True,
-            "created_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat()
+            "created_at": now.isoformat(),
+            "updated_at": now.isoformat(),
+            "message": "Arbre dupliqué avec succès"
         }
+
+# ============== INTERVENTION ENDPOINTS ==============
+
+@app.post("/api/interventions")
+def create_intervention(intervention: Intervention):
+    with get_db() as conn:
+        cursor = conn.cursor()
         
-        result = trees_collection.insert_one(new_tree)
-        new_tree["id"] = str(result.inserted_id)
-        del new_tree["_id"]
+        cursor.execute("SELECT id FROM trees WHERE id = %s", (intervention.tree_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Arbre non trouvé")
         
-        return new_tree
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        int_id = generate_id()
+        int_date = intervention.date or datetime.utcnow().isoformat()
+        now = datetime.utcnow()
+        
+        cursor.execute("""
+            INSERT INTO interventions (id, tree_id, type, notes, date, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (int_id, intervention.tree_id, intervention.type, intervention.notes, int_date, now))
+        
+        return {
+            "id": int_id,
+            "tree_id": intervention.tree_id,
+            "type": intervention.type,
+            "notes": intervention.notes,
+            "date": int_date,
+            "created_at": now.isoformat(),
+            "message": "Intervention ajoutée avec succès"
+        }
+
+@app.get("/api/interventions")
+def get_interventions(tree_id: Optional[str] = None):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        
+        if tree_id:
+            cursor.execute("SELECT * FROM interventions WHERE tree_id = %s ORDER BY date DESC", (tree_id,))
+        else:
+            cursor.execute("SELECT * FROM interventions ORDER BY date DESC")
+        
+        interventions = cursor.fetchall()
+        
+        return [{
+            "id": i["id"],
+            "tree_id": i["tree_id"],
+            "type": i["type"],
+            "notes": i["notes"],
+            "date": i["date"].isoformat() if i["date"] else None,
+            "created_at": i["created_at"].isoformat() if i["created_at"] else None
+        } for i in interventions]
+
+@app.delete("/api/interventions/{intervention_id}")
+def delete_intervention(intervention_id: str):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT id FROM interventions WHERE id = %s", (intervention_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Intervention non trouvée")
+        
+        cursor.execute("DELETE FROM interventions WHERE id = %s", (intervention_id,))
+        
+        return {"message": "Intervention supprimée avec succès", "success": True}
+
+# ============== PHOTO ENDPOINTS ==============
+
+@app.post("/api/trees/{tree_id}/photos")
+def add_photo(tree_id: str, photo_data: dict):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT id FROM trees WHERE id = %s", (tree_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Arbre non trouvé")
+        
+        if photo_data.get("photo"):
+            photo_id = generate_id()
+            cursor.execute(
+                "INSERT INTO tree_photos (id, tree_id, photo) VALUES (%s, %s, %s)",
+                (photo_id, tree_id, photo_data["photo"])
+            )
+            
+            # Update main photo
+            cursor.execute(
+                "UPDATE trees SET photo = %s, updated_at = %s WHERE id = %s",
+                (photo_data["photo"], datetime.utcnow(), tree_id)
+            )
+        
+        cursor.execute("SELECT COUNT(*) as count FROM tree_photos WHERE tree_id = %s", (tree_id,))
+        count = cursor.fetchone()["count"]
+        
+        return {"message": "Photo ajoutée avec succès", "photo_count": count, "success": True}
+
+@app.delete("/api/trees/{tree_id}/photos/{photo_index}")
+def delete_photo(tree_id: str, photo_index: int):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT id FROM tree_photos WHERE tree_id = %s ORDER BY created_at", (tree_id,))
+        photos = cursor.fetchall()
+        
+        if photo_index < 0 or photo_index >= len(photos):
+            raise HTTPException(status_code=400, detail="Index de photo invalide")
+        
+        photo_id = photos[photo_index]["id"]
+        cursor.execute("DELETE FROM tree_photos WHERE id = %s", (photo_id,))
+        
+        # Update main photo
+        cursor.execute("SELECT photo FROM tree_photos WHERE tree_id = %s ORDER BY created_at DESC LIMIT 1", (tree_id,))
+        last_photo = cursor.fetchone()
+        cursor.execute(
+            "UPDATE trees SET photo = %s, updated_at = %s WHERE id = %s",
+            (last_photo["photo"] if last_photo else None, datetime.utcnow(), tree_id)
+        )
+        
+        return {"message": "Photo supprimée avec succès", "photo_count": len(photos) - 1, "success": True}
 
 # ============== SEARCH ENDPOINT ==============
 
@@ -407,294 +674,216 @@ def search_trees(
     health: Optional[str] = None,
     species: Optional[str] = None
 ):
-    filter_query = {}
-    
-    if farm_id:
-        filter_query["farm_id"] = farm_id
-    
-    if health and health != "all":
-        filter_query["health"] = health
-    
-    if species:
-        filter_query["species"] = {"$regex": species, "$options": "i"}
-    
-    trees = list(trees_collection.find(filter_query))
-    results = [serialize_doc(tree) for tree in trees]
-    
-    # Text search if query provided
-    if query:
-        query_lower = query.lower()
-        results = [
-            tree for tree in results
-            if query_lower in tree.get("species", "").lower()
-            or query_lower in tree.get("variety", "").lower()
-            or query_lower in tree.get("position", "").lower()
-            or query_lower in tree.get("notes", "").lower()
-        ]
-    
-    return results
-
-# ============== INTERVENTION ENDPOINTS ==============
-
-@app.post("/api/interventions")
-def create_intervention(intervention: Intervention):
-    # Verify tree exists
-    tree = trees_collection.find_one({"_id": ObjectId(intervention.tree_id)})
-    if not tree:
-        raise HTTPException(status_code=404, detail="Tree not found")
-    
-    intervention_dict = intervention.dict()
-    intervention_dict["date"] = intervention_dict.get("date") or datetime.utcnow().isoformat()
-    intervention_dict["created_at"] = datetime.utcnow().isoformat()
-    
-    result = interventions_collection.insert_one(intervention_dict)
-    intervention_dict["id"] = str(result.inserted_id)
-    del intervention_dict["_id"]
-    
-    return intervention_dict
-
-@app.get("/api/interventions")
-def get_interventions(tree_id: Optional[str] = None):
-    query = {}
-    if tree_id:
-        query["tree_id"] = tree_id
-    
-    interventions = list(interventions_collection.find(query).sort("date", -1))
-    return [serialize_doc(i) for i in interventions]
-
-@app.get("/api/interventions/{intervention_id}")
-def get_intervention(intervention_id: str):
-    try:
-        intervention = interventions_collection.find_one({"_id": ObjectId(intervention_id)})
-        if not intervention:
-            raise HTTPException(status_code=404, detail="Intervention not found")
-        return serialize_doc(intervention)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-@app.delete("/api/interventions/{intervention_id}")
-def delete_intervention(intervention_id: str):
-    try:
-        result = interventions_collection.delete_one({"_id": ObjectId(intervention_id)})
-        if result.deleted_count == 0:
-            raise HTTPException(status_code=404, detail="Intervention not found")
-        return {"message": "Intervention deleted successfully"}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-# ============== PHOTO MANAGEMENT ==============
-
-@app.post("/api/trees/{tree_id}/photos")
-def add_photo(tree_id: str, photo_data: dict):
-    try:
-        tree = trees_collection.find_one({"_id": ObjectId(tree_id)})
-        if not tree:
-            raise HTTPException(status_code=404, detail="Tree not found")
+    with get_db() as conn:
+        cursor = conn.cursor()
         
-        photos = tree.get("photos", [])
-        if photo_data.get("photo"):
-            photos.append(photo_data["photo"])
+        sql = "SELECT * FROM trees WHERE 1=1"
+        params = []
         
-        trees_collection.update_one(
-            {"_id": ObjectId(tree_id)},
-            {
-                "$set": {
-                    "photos": photos,
-                    "photo": photo_data.get("photo"),  # Keep last photo as main
-                    "updated_at": datetime.utcnow().isoformat()
-                }
-            }
-        )
+        if farm_id:
+            sql += " AND farm_id = %s"
+            params.append(farm_id)
         
-        return {"message": "Photo added successfully", "photo_count": len(photos)}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        if health and health != "all":
+            sql += " AND health = %s"
+            params.append(health)
+        
+        if species:
+            sql += " AND species LIKE %s"
+            params.append(f"%{species}%")
+        
+        if query:
+            sql += " AND (species LIKE %s OR variety LIKE %s OR position LIKE %s OR notes LIKE %s)"
+            params.extend([f"%{query}%"] * 4)
+        
+        cursor.execute(sql, params)
+        trees = cursor.fetchall()
+        
+        result = []
+        for tree in trees:
+            cursor.execute("SELECT photo FROM tree_photos WHERE tree_id = %s", (tree["id"],))
+            photos = [p["photo"] for p in cursor.fetchall()]
+            result.append(format_tree(tree, photos))
+        
+        return result
 
-@app.delete("/api/trees/{tree_id}/photos/{photo_index}")
-def delete_photo(tree_id: str, photo_index: int):
-    try:
-        tree = trees_collection.find_one({"_id": ObjectId(tree_id)})
-        if not tree:
-            raise HTTPException(status_code=404, detail="Tree not found")
+# ============== STATISTICS ENDPOINT ==============
+
+@app.get("/api/statistics/{farm_id}")
+def get_statistics(farm_id: str):
+    with get_db() as conn:
+        cursor = conn.cursor()
         
-        photos = tree.get("photos", [])
-        if photo_index < 0 or photo_index >= len(photos):
-            raise HTTPException(status_code=400, detail="Invalid photo index")
+        cursor.execute("SELECT * FROM trees WHERE farm_id = %s", (farm_id,))
+        trees = cursor.fetchall()
         
-        photos.pop(photo_index)
+        stats = {
+            "total": len(trees),
+            "good": 0, "fair": 0, "poor": 0, "dead": 0,
+            "species_count": {},
+            "recent_plantings": 0,
+            "total_interventions": 0,
+            "interventions_by_type": {}
+        }
         
-        # Update main photo if needed
-        main_photo = photos[-1] if photos else None
+        tree_ids = [t["id"] for t in trees]
         
-        trees_collection.update_one(
-            {"_id": ObjectId(tree_id)},
-            {
-                "$set": {
-                    "photos": photos,
-                    "photo": main_photo,
-                    "updated_at": datetime.utcnow().isoformat()
-                }
-            }
-        )
+        for tree in trees:
+            health = tree.get("health", "good")
+            stats[health] = stats.get(health, 0) + 1
+            
+            species = tree.get("species", "Unknown")
+            stats["species_count"][species] = stats["species_count"].get(species, 0) + 1
+            
+            plant_date = tree.get("plant_date")
+            if plant_date:
+                try:
+                    if hasattr(plant_date, 'date'):
+                        plant_date = plant_date
+                    else:
+                        plant_date = datetime.fromisoformat(str(plant_date).replace('Z', ''))
+                    days_diff = (datetime.now() - datetime.combine(plant_date, datetime.min.time())).days
+                    if days_diff <= 30:
+                        stats["recent_plantings"] += 1
+                except:
+                    pass
         
-        return {"message": "Photo deleted successfully", "photo_count": len(photos)}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        if tree_ids:
+            placeholders = ','.join(['%s'] * len(tree_ids))
+            cursor.execute(f"SELECT type, COUNT(*) as count FROM interventions WHERE tree_id IN ({placeholders}) GROUP BY type", tree_ids)
+            for row in cursor.fetchall():
+                stats["interventions_by_type"][row["type"]] = row["count"]
+                stats["total_interventions"] += row["count"]
+        
+        return stats
 
 # ============== EXPORT/IMPORT ENDPOINTS ==============
 
 @app.get("/api/export")
 def export_data(farm_id: Optional[str] = None):
-    """Export all data or data for a specific farm"""
-    try:
+    with get_db() as conn:
+        cursor = conn.cursor()
+        
         if farm_id:
-            farms = list(farms_collection.find({"_id": ObjectId(farm_id)}))
-            trees = list(trees_collection.find({"farm_id": farm_id}))
-            tree_ids = [str(tree["_id"]) for tree in trees]
-            interventions = list(interventions_collection.find({"tree_id": {"$in": tree_ids}}))
+            cursor.execute("SELECT * FROM farms WHERE id = %s", (farm_id,))
         else:
-            farms = list(farms_collection.find())
-            trees = list(trees_collection.find())
-            interventions = list(interventions_collection.find())
+            cursor.execute("SELECT * FROM farms")
+        farms = cursor.fetchall()
+        
+        if farm_id:
+            cursor.execute("SELECT * FROM trees WHERE farm_id = %s", (farm_id,))
+        else:
+            cursor.execute("SELECT * FROM trees")
+        trees = cursor.fetchall()
+        
+        tree_ids = [t["id"] for t in trees]
+        interventions = []
+        if tree_ids:
+            placeholders = ','.join(['%s'] * len(tree_ids))
+            cursor.execute(f"SELECT * FROM interventions WHERE tree_id IN ({placeholders})", tree_ids)
+            interventions = cursor.fetchall()
+        
+        # Format data
+        farms_data = []
+        for f in farms:
+            gps = None
+            if f.get("gps_latitude") and f.get("gps_longitude"):
+                gps = {"latitude": f["gps_latitude"], "longitude": f["gps_longitude"]}
+            farms_data.append({
+                "id": f["id"], "name": f["name"], "description": f["description"],
+                "grid_rows": f["grid_rows"], "grid_cols": f["grid_cols"],
+                "gps_coords": gps,
+                "created_at": f["created_at"].isoformat() if f["created_at"] else None
+            })
+        
+        trees_data = [format_tree(t) for t in trees]
+        
+        int_data = [{
+            "id": i["id"], "tree_id": i["tree_id"], "type": i["type"],
+            "notes": i["notes"], "date": i["date"].isoformat() if i["date"] else None
+        } for i in interventions]
         
         return {
             "export_date": datetime.utcnow().isoformat(),
-            "farms": [serialize_doc(f) for f in farms],
-            "trees": [serialize_doc(t) for t in trees],
-            "interventions": [serialize_doc(i) for i in interventions]
+            "farms": farms_data,
+            "trees": trees_data,
+            "interventions": int_data
         }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/api/import")
 def import_data(data: dict):
-    """Import data from export"""
-    try:
+    with get_db() as conn:
+        cursor = conn.cursor()
         imported = {"farms": 0, "trees": 0, "interventions": 0}
         
-        # Import farms
-        for farm_data in data.get("farms", []):
-            if "id" in farm_data:
-                del farm_data["id"]
-            farm_data["created_at"] = farm_data.get("created_at", datetime.utcnow().isoformat())
-            farm_data["updated_at"] = datetime.utcnow().isoformat()
-            farms_collection.insert_one(farm_data)
+        for farm in data.get("farms", []):
+            farm_id = farm.get("id") or generate_id()
+            gps = farm.get("gps_coords")
+            cursor.execute("""
+                INSERT IGNORE INTO farms (id, name, description, grid_rows, grid_cols, gps_latitude, gps_longitude)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (farm_id, farm["name"], farm.get("description"), farm.get("grid_rows", 20), farm.get("grid_cols", 20),
+                  gps["latitude"] if gps else None, gps["longitude"] if gps else None))
             imported["farms"] += 1
         
-        # Import trees
-        for tree_data in data.get("trees", []):
-            if "id" in tree_data:
-                del tree_data["id"]
-            tree_data["created_at"] = tree_data.get("created_at", datetime.utcnow().isoformat())
-            tree_data["updated_at"] = datetime.utcnow().isoformat()
-            trees_collection.insert_one(tree_data)
+        for tree in data.get("trees", []):
+            tree_id = tree.get("id") or generate_id()
+            gps = tree.get("gps_coords")
+            cursor.execute("""
+                INSERT IGNORE INTO trees (id, farm_id, position, species, variety, plant_date, health, notes, origin, gps_latitude, gps_longitude)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (tree_id, tree["farm_id"], tree["position"], tree["species"], tree.get("variety"),
+                  tree.get("plant_date"), tree.get("health", "good"), tree.get("notes"), tree.get("origin"),
+                  gps["latitude"] if gps else None, gps["longitude"] if gps else None))
             imported["trees"] += 1
         
-        # Import interventions
-        for int_data in data.get("interventions", []):
-            if "id" in int_data:
-                del int_data["id"]
-            int_data["created_at"] = int_data.get("created_at", datetime.utcnow().isoformat())
-            interventions_collection.insert_one(int_data)
+        for intervention in data.get("interventions", []):
+            int_id = intervention.get("id") or generate_id()
+            cursor.execute("""
+                INSERT IGNORE INTO interventions (id, tree_id, type, notes, date)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (int_id, intervention["tree_id"], intervention["type"], intervention.get("notes"), intervention.get("date")))
             imported["interventions"] += 1
         
-        return {
-            "message": "Import successful",
-            "imported": imported
-        }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        return {"message": "Import réussi", "imported": imported, "success": True}
 
-# Batch sync endpoint for offline mode
+# ============== SYNC ENDPOINT ==============
+
 @app.post("/api/trees/sync")
 def sync_trees(sync_batch: SyncBatch):
-    synced_trees = []
+    synced = []
     errors = []
-
-    for tree_data in sync_batch.trees:
-        try:
-            # If tree has an id, update it; otherwise create new
-            if "id" in tree_data and tree_data["id"]:
-                tree_id = tree_data["id"]
-                del tree_data["id"]
-                tree_data["updated_at"] = datetime.utcnow().isoformat()
-                tree_data["synced"] = True
-
-                result = trees_collection.update_one(
-                    {"_id": ObjectId(tree_id)},
-                    {"$set": tree_data}
-                )
-
-                if result.matched_count > 0:
-                    tree = trees_collection.find_one({"_id": ObjectId(tree_id)})
-                    synced_trees.append(serialize_doc(tree))
-                else:
-                    errors.append({"tree_id": tree_id, "error": "Tree not found"})
-            else:
-                # Create new tree
-                tree_data["created_at"] = datetime.utcnow().isoformat()
-                tree_data["updated_at"] = datetime.utcnow().isoformat()
-                tree_data["synced"] = True
-
-                result = trees_collection.insert_one(tree_data)
-                tree_data["id"] = str(result.inserted_id)
-                del tree_data["_id"]
-                synced_trees.append(tree_data)
-        except Exception as e:
-            errors.append({"tree_data": tree_data, "error": str(e)})
-
-    return {
-        "synced_count": len(synced_trees),
-        "error_count": len(errors),
-        "synced_trees": synced_trees,
-        "errors": errors
-    }
-
-# Statistics endpoint
-@app.get("/api/statistics/{farm_id}")
-def get_statistics(farm_id: str):
-    trees = list(trees_collection.find({"farm_id": farm_id}))
-    tree_ids = [str(tree["_id"]) for tree in trees]
-    interventions = list(interventions_collection.find({"tree_id": {"$in": tree_ids}}))
-
-    stats = {
-        "total": len(trees),
-        "good": 0,
-        "fair": 0,
-        "poor": 0,
-        "dead": 0,
-        "species_count": {},
-        "recent_plantings": 0,
-        "total_interventions": len(interventions),
-        "interventions_by_type": {}
-    }
-
-    # Count by health status
-    for tree in trees:
-        health = tree.get("health", "good")
-        stats[health] = stats.get(health, 0) + 1
-
-        # Count by species
-        species = tree.get("species", "Unknown")
-        stats["species_count"][species] = stats["species_count"].get(species, 0) + 1
-
-        # Count recent plantings (last 30 days)
-        plant_date = tree.get("plant_date")
-        if plant_date:
-            try:
-                plant_datetime = datetime.fromisoformat(plant_date.replace('Z', '+00:00').replace('+00:00', ''))
-                days_diff = (datetime.now() - plant_datetime).days
-                if days_diff <= 30:
-                    stats["recent_plantings"] += 1
-            except:
-                pass
     
-    # Count interventions by type
-    for intervention in interventions:
-        int_type = intervention.get("type", "other")
-        stats["interventions_by_type"][int_type] = stats["interventions_by_type"].get(int_type, 0) + 1
-
-    return stats
+    with get_db() as conn:
+        cursor = conn.cursor()
+        
+        for tree_data in sync_batch.trees:
+            try:
+                if tree_data.get("id"):
+                    cursor.execute("SELECT id FROM trees WHERE id = %s", (tree_data["id"],))
+                    if cursor.fetchone():
+                        # Update
+                        cursor.execute("""
+                            UPDATE trees SET species=%s, variety=%s, health=%s, notes=%s, synced=TRUE, updated_at=%s WHERE id=%s
+                        """, (tree_data.get("species"), tree_data.get("variety"), tree_data.get("health"),
+                              tree_data.get("notes"), datetime.utcnow(), tree_data["id"]))
+                        synced.append(tree_data)
+                        continue
+                
+                # Create new
+                tree_id = generate_id()
+                cursor.execute("""
+                    INSERT INTO trees (id, farm_id, position, species, variety, plant_date, health, notes, synced)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, TRUE)
+                """, (tree_id, tree_data["farm_id"], tree_data["position"], tree_data["species"],
+                      tree_data.get("variety"), tree_data.get("plant_date"), tree_data.get("health", "good"),
+                      tree_data.get("notes")))
+                tree_data["id"] = tree_id
+                synced.append(tree_data)
+            except Exception as e:
+                errors.append({"data": tree_data, "error": str(e)})
+    
+    return {"synced_count": len(synced), "error_count": len(errors), "synced_trees": synced, "errors": errors}
 
 if __name__ == "__main__":
     import uvicorn
