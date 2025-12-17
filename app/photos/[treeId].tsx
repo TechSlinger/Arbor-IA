@@ -126,7 +126,7 @@ export default function PhotosScreen() {
       if (!response.ok) throw new Error('Upload failed');
       
       loadTree();
-      Alert.alert('Succès', 'Photo ajoutée');
+      Alert.alert('Succès', 'Photo ajoutée avec succès');
     } catch (error) {
       console.error('Error uploading photo:', error);
       Alert.alert('Erreur', 'Impossible d\'ajouter la photo');
