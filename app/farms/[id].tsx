@@ -362,6 +362,10 @@ export default function FarmDetailScreen() {
             color="#556B2F"
           />
         </TouchableOpacity>
+
+        <TouchableOpacity onPress={handleDeleteFarm} style={styles.deleteButton}>
+          <Ionicons name="trash-outline" size={24} color="#dc3545" />
+        </TouchableOpacity>
       </View>
 
       {/* Content */}
