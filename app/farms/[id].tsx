@@ -65,6 +65,7 @@ export default function FarmDetailScreen() {
     dead: 0,
   });
   const [loading, setLoading] = useState(true);
+  const [deleting, setDeleting] = useState(false);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
 
   useEffect(() => {
@@ -126,6 +127,69 @@ export default function FarmDetailScreen() {
       Alert.alert("Erreur", "Impossible de charger les données.");
     } finally {
       setLoading(false);
+    }
+  };
+
+ const handleDeleteFarm = () => {
+    const treeCount = Object.keys(trees).length;
+    
+    Alert.alert(
+      "Supprimer la ferme",
+      treeCount > 0
+        ? `Êtes-vous sûr de vouloir supprimer "${farm?.name}" ?\n\nCette action supprimera également ${treeCount} arbre${treeCount > 1 ? 's' : ''}.`
+        : `Êtes-vous sûr de vouloir supprimer "${farm?.name}" ?`,
+      [
+        {
+          text: "Annuler",
+          style: "cancel",
+        },
+        {
+          text: "Supprimer",
+          style: "destructive",
+          onPress: confirmDeleteFarm,
+        },
+      ]
+    );
+  };
+
+  const confirmDeleteFarm = async () => {
+    if (!farmId) return;
+
+    try {
+      setDeleting(true);
+      console.log("🗑️ Deleting farm:", farmId);
+      console.log("🗑️ DELETE URL:", `${EXPO_BACKEND_URL}/api/farms/${farmId}`);
+
+      const response = await fetch(`${EXPO_BACKEND_URL}/api/farms/${farmId}`, {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+
+      console.log("🗑️ DELETE Response status:", response.status);
+      console.log("🗑️ DELETE Response ok:", response.ok);
+
+      // Check for successful deletion (200, 201, 204 are all valid)
+      if (!response.ok && response.status !== 204) {
+        const errorText = await response.text();
+        console.log("🗑️ DELETE Error response:", errorText);
+        throw new Error(`Failed to delete farm: ${response.status}`);
+      }
+
+      console.log("✅ Farm deleted successfully");
+      
+      Alert.alert("Succès", "La ferme a été supprimée.", [
+        {
+          text: "OK",
+          onPress: () => router.back(),
+        },
+      ]);
+    } catch (error) {
+      console.log("❌ DELETE ERROR:", error);
+      Alert.alert("Erreur", `Impossible de supprimer la ferme: ${error.message}`);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -327,6 +391,18 @@ export default function FarmDetailScreen() {
             color="#556B2F"
           />
         </TouchableOpacity>
+
+        <TouchableOpacity
+          onPress={handleDeleteFarm}
+          style={styles.deleteButton}
+          disabled={deleting}
+        >
+          {deleting ? (
+            <ActivityIndicator size="small" color="#dc3545" />
+          ) : (
+            <Ionicons name="trash-outline" size={24} color="#dc3545" />
+          )}
+        </TouchableOpacity>
       </View>
 
       {/* Content */}
@@ -384,6 +460,11 @@ const styles = StyleSheet.create({
   },
   iconButton: {
     padding: 4,
+    marginLeft: 8,
+  },
+  deleteButton: {
+    padding: 4,
+    marginLeft: 8,
   },
   statsCard: {
     backgroundColor: "#fff",
