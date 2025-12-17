@@ -130,9 +130,10 @@ export default function InterventionsScreen() {
                 method: 'DELETE',
               });
               if (!response.ok) throw new Error('Delete failed');
+              Alert.alert('Succès', 'Intervention supprimée avec succès');
               loadData();
             } catch (error) {
-              Alert.alert('Erreur', 'Impossible de supprimer');
+              Alert.alert('Erreur', 'Impossible de supprimer l\'intervention');
             }
           },
         },
