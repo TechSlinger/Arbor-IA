@@ -86,7 +86,7 @@ export default function FarmDetailScreen() {
                 throw new Error("Farm deletion failed");
               }
 
-              Alert.alert("Succès", "Ferme supprimée!", [
+              Alert.alert("Succès", "Ferme et arbres associés supprimés avec succès!", [
                 {
                   text: "OK",
                   onPress: () => router.back(),
